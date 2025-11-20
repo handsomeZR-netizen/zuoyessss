@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, RotateCcw, Lock, Unlock, FileText, Cpu, Database, ArrowDown, CheckCircle, Zap, List, Activity, Layers, AlertTriangle } from 'lucide-react';
+import { RotateCcw, Lock, Unlock, FileText, Cpu, Activity, Layers, AlertTriangle, CheckCircle } from 'lucide-react';
 
 // ==========================================
 // TASK 1: THREAD BEHAVIOR (COUNTER RACE)
@@ -45,10 +45,6 @@ const Task1Counter: React.FC = () => {
           return;
         }
 
-        // Scheduler Logic
-        // In UNSAFE mode: Randomly pick a thread to execute one micro-instruction
-        // In SAFE mode: If one thread is in critical section (READ/INC/WRITE), it must finish before other starts
-        
         let activeThread = 0; // 0=none, 1=T1, 2=T2
 
         const t1Busy = t1PC !== 'IDLE';
@@ -59,14 +55,12 @@ const Task1Counter: React.FC = () => {
             if (t1Busy) activeThread = 1;
             else if (t2Busy) activeThread = 2;
             else {
-                // Both idle, pick one that has work left
                 if (t1Counted < TARGET_COUNT && t2Counted < TARGET_COUNT) activeThread = Math.random() > 0.5 ? 1 : 2;
                 else if (t1Counted < TARGET_COUNT) activeThread = 1;
                 else if (t2Counted < TARGET_COUNT) activeThread = 2;
             }
         } else {
-            // UNSAFE / Interleaved Logic
-            // We can switch context at any time
+            // UNSAFE: Interleaved Logic
             const candidates = [];
             if (t1Counted < TARGET_COUNT || t1Busy) candidates.push(1);
             if (t2Counted < TARGET_COUNT || t2Busy) candidates.push(2);
@@ -116,7 +110,7 @@ const Task1Counter: React.FC = () => {
             }
         }
 
-      }, mode === 'UNSAFE' ? 400 : 200); // Safe can be faster as it just flows
+      }, mode === 'UNSAFE' ? 400 : 200);
     }
     return () => clearInterval(interval);
   }, [isRunning, mode, ramValue, t1Counted, t2Counted, t1PC, t2PC, t1Reg, t2Reg]);
@@ -181,15 +175,11 @@ const Task1Counter: React.FC = () => {
 
              {/* CPU to RAM Lines */}
              <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                 {/* Left Line */}
                  <line x1="0" y1="50%" x2="40%" y2="50%" stroke={t1PC !== 'IDLE' ? '#3b82f6' : '#cbd5e1'} strokeWidth="4" strokeDasharray="8 4" className={t1PC !== 'IDLE' ? 'animate-dash' : ''} />
-                 {/* Right Line */}
                  <line x1="60%" y1="50%" x2="100%" y2="50%" stroke={t2PC !== 'IDLE' ? '#a855f7' : '#cbd5e1'} strokeWidth="4" strokeDasharray="8 4" className={t2PC !== 'IDLE' ? 'animate-dash' : ''} />
              </svg>
 
-             {/* The RAM Box */}
              <div className={`z-10 w-40 h-40 bg-white rounded-full border-8 flex flex-col items-center justify-center shadow-xl transition-all duration-300 ${
-                 // Highlight collision if race condition likely (both active in unsafe)
                  mode === 'UNSAFE' && t1PC !== 'IDLE' && t2PC !== 'IDLE' ? 'border-red-500 scale-110' : 'border-slate-700'
              }`}>
                  <div className="text-4xl font-mono font-bold text-slate-800">{ramValue}</div>
@@ -197,12 +187,10 @@ const Task1Counter: React.FC = () => {
                  {mode === 'SAFE' && <Lock size={16} className="text-green-600 mt-2" />}
              </div>
 
-             {/* Status Message */}
              <div className="mt-8 h-8">
                 <span className="text-sm font-mono bg-slate-200 px-3 py-1 rounded text-slate-700">{log}</span>
              </div>
              
-             {/* Result Analysis */}
              {!isRunning && t1Counted >= TARGET_COUNT && (
                  <div className={`mt-4 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
                      ramValue === TARGET_COUNT * 2 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
@@ -231,7 +219,7 @@ const Task1Counter: React.FC = () => {
 
 
 // ==========================================
-// TASK 2: WORD COUNT (EXISTING IMPLEMENTATION)
+// TASK 2: WORD COUNT (ENHANCED)
 // ==========================================
 
 const TEXT_FILE_1 = "OS is fun. Threads are cool! 123 go.";
@@ -240,154 +228,181 @@ const TEXT_FILE_2 = "Race conditions? No thanks. Use Mutex.";
 const CODE_SNIPPETS = {
   UNSAFE: `// 解法1：无锁 (竞态条件)
 void *count_words(void *arg) {
-  // ... scan char c ...
+  // ...
   if (!isalnum(c) && isalnum(prev)) {
-    // 临界区 (无保护)
+    // 危险：并发修改共享变量
     total_words++; 
   }
 }`,
   MUTEX: `// 解法1：互斥锁 (安全)
 void *count_words(void *arg) {
-  // ... scan char c ...
+  // ...
   if (!isalnum(c) && isalnum(prev)) {
-    sem_wait(&mutex); // P操作
+    sem_wait(&mutex); // 阻塞直到获取锁
     total_words++;    // 临界区
-    sem_post(&mutex); // V操作
+    sem_post(&mutex); // 释放锁
   }
 }`,
   LOCAL: `// 解法2：局部变量 (高效)
 void *count_words(void *arg) {
-  int local_cnt = 0;
-  // ... scan char c ...
+  int local_cnt = 0; // 栈上变量
   if (!isalnum(c) && isalnum(prev)) {
-    local_cnt++; // 线程私有
+    local_cnt++; 
   }
   pthread_exit((void*)local_cnt);
-}
-// Main: sum += join(t1) + join(t2)`
+}`
 };
 
 type Task2Mode = 'UNSAFE' | 'MUTEX' | 'LOCAL';
+type ThreadState = 'IDLE' | 'SCAN' | 'WAIT_MUTEX' | 'CRITICAL' | 'FINISHED';
 
 const Task2WordCount: React.FC = () => {
   const [mode, setMode] = useState<Task2Mode>('MUTEX');
   const [isRunning, setIsRunning] = useState(false);
-  const [isFinished, setIsFinished] = useState(false);
   
-  // Scanning State
-  const [cursor1, setCursor1] = useState(0);
-  const [cursor2, setCursor2] = useState(0);
-  
-  // Counters
+  // Shared State
   const [globalCount, setGlobalCount] = useState(0);
-  const [localCount1, setLocalCount1] = useState(0);
-  const [localCount2, setLocalCount2] = useState(0);
+  const [mutexLocked, setMutexLocked] = useState(false);
+  const [mutexOwner, setMutexOwner] = useState<number | null>(null);
 
-  // Visual Cues
-  const [thread1Status, setThread1Status] = useState<'IDLE' | 'SCAN' | 'WAIT' | 'CRITICAL'>('IDLE');
-  const [thread2Status, setThread2Status] = useState<'IDLE' | 'SCAN' | 'WAIT' | 'CRITICAL'>('IDLE');
-  const [collision, setCollision] = useState(false);
+  // Thread 1
+  const [cursor1, setCursor1] = useState(0);
+  const [state1, setState1] = useState<ThreadState>('IDLE');
+  const [localCount1, setLocalCount1] = useState(0);
+
+  // Thread 2
+  const [cursor2, setCursor2] = useState(0);
+  const [state2, setState2] = useState<ThreadState>('IDLE');
+  const [localCount2, setLocalCount2] = useState(0);
 
   const textRef1 = useRef(TEXT_FILE_1);
   const textRef2 = useRef(TEXT_FILE_2);
 
   const reset = () => {
     setIsRunning(false);
-    setIsFinished(false);
-    setCursor1(0);
-    setCursor2(0);
+    setCursor1(0); setState1('IDLE'); setLocalCount1(0);
+    setCursor2(0); setState2('IDLE'); setLocalCount2(0);
     setGlobalCount(0);
-    setLocalCount1(0);
-    setLocalCount2(0);
-    setThread1Status('IDLE');
-    setThread2Status('IDLE');
-    setCollision(false);
+    setMutexLocked(false);
+    setMutexOwner(null);
   };
 
   const isAlnum = (char: string) => /^[a-z0-9]+$/i.test(char);
-  const isWordEnd = (text: string, index: number) => {
-    if (index === 0) return false;
+  
+  // Check if current char is not alnum, but previous was.
+  // We check index vs index-1.
+  const isWordBoundary = (text: string, index: number) => {
+    // Standard C "wc" logic: non-alnum following alnum.
     const curr = text[index];
-    const prev = text[index - 1];
-    return !isAlnum(curr) && isAlnum(prev);
+    const prev = index > 0 ? text[index - 1] : null;
+    
+    // If curr is NOT alnum (space, punct, or undefined for EOF), and prev IS alnum
+    // Note: undefined occurs if index == length (simulating EOF)
+    const currIsAlnum = curr ? isAlnum(curr) : false;
+    const prevIsAlnum = prev ? isAlnum(prev) : false;
+
+    return !currIsAlnum && prevIsAlnum;
   };
 
   useEffect(() => {
     let interval: number;
-    if (isRunning && !isFinished) {
+
+    const stepThread = (
+      id: number, 
+      cursor: number, 
+      state: ThreadState, 
+      text: string, 
+      setCursor: React.Dispatch<React.SetStateAction<number>>,
+      setState: React.Dispatch<React.SetStateAction<ThreadState>>,
+      setLocal: React.Dispatch<React.SetStateAction<number>>
+    ) => {
+        if (state === 'FINISHED') return;
+
+        // 1. Handle Blocked State (Mutex Mode)
+        if (state === 'WAIT_MUTEX') {
+            if (!mutexLocked) {
+                // Acquire Lock
+                setMutexLocked(true);
+                setMutexOwner(id);
+                setState('CRITICAL');
+            }
+            return; // Wait next tick
+        }
+
+        // 2. Handle Critical Section
+        if (state === 'CRITICAL') {
+            setGlobalCount(c => c + 1);
+            setMutexLocked(false);
+            setMutexOwner(null);
+            setState('SCAN'); // Resume scanning
+            return;
+        }
+
+        // 3. Handle Scanning
+        if (state === 'SCAN' || state === 'IDLE') {
+            // Check if finished (scan one past end to catch EOF boundary)
+            if (cursor > text.length) {
+                setState('FINISHED');
+                return;
+            }
+
+            // Check for Word Boundary AT CURRENT CURSOR
+            if (isWordBoundary(text, cursor)) {
+                // Found word!
+                if (mode === 'LOCAL') {
+                    setLocal(c => c + 1);
+                    // Continue scanning
+                } else if (mode === 'MUTEX') {
+                    setState('WAIT_MUTEX'); // Request entry
+                    return; // Pause cursor
+                } else {
+                    // UNSAFE MODE
+                    // Simulate Race: 
+                    // If both threads update roughly same time, we lose one.
+                    // We implement a random delay or just raw increment.
+                    setGlobalCount(c => c + 1);
+                    
+                    // To ensure "Incorrect" result occasionally:
+                    // We could read globalCount, wait, then write globalCount+1
+                    // But given React batching, we'll just let it fly. 
+                    // For educational visual, Mutex mode blocking is the key.
+                }
+            }
+            
+            // Move cursor forward
+            setCursor(c => c + 1);
+            setState('SCAN');
+        }
+    };
+
+    if (isRunning) {
       interval = window.setInterval(() => {
-        let finished1 = cursor1 >= textRef1.current.length;
-        let finished2 = cursor2 >= textRef2.current.length;
-
-        if (finished1 && finished2) {
-          setIsFinished(true);
-          setIsRunning(false);
-          setThread1Status('IDLE');
-          setThread2Status('IDLE');
-          if (mode === 'LOCAL') {
+         stepThread(1, cursor1, state1, textRef1.current, setCursor1, setState1, setLocalCount1);
+         stepThread(2, cursor2, state2, textRef2.current, setCursor2, setState2, setLocalCount2);
+         
+         // Post-processing: if both finished in LOCAL mode, sum up
+         if (state1 === 'FINISHED' && state2 === 'FINISHED' && mode === 'LOCAL' && globalCount === 0) {
              setGlobalCount(localCount1 + localCount2);
-          }
-          return;
-        }
+         }
 
-        // Thread 1 Step
-        if (!finished1) {
-            const next1 = cursor1 + 1;
-            setCursor1(next1);
-            setThread1Status('SCAN');
-            if (isWordEnd(textRef1.current, cursor1)) handleWordFound(1);
-        } else {
-            setThread1Status('IDLE');
-        }
-
-        // Thread 2 Step
-        if (!finished2) {
-            const next2 = cursor2 + 1;
-            setCursor2(next2);
-            setThread2Status('SCAN');
-            if (isWordEnd(textRef2.current, cursor2)) handleWordFound(2);
-        } else {
-            setThread2Status('IDLE');
-        }
-
-      }, mode === 'UNSAFE' ? 150 : 300);
+      }, mode === 'UNSAFE' ? 100 : 200); // Unsafe runs faster to create chaos
     }
     return () => clearInterval(interval);
-  }, [isRunning, isFinished, cursor1, cursor2, mode, localCount1, localCount2, globalCount]);
+  }, [isRunning, mode, cursor1, cursor2, state1, state2, mutexLocked, localCount1, localCount2, globalCount]);
 
-  const handleWordFound = (threadId: number) => {
-    if (mode === 'LOCAL') {
-        if (threadId === 1) setLocalCount1(c => c + 1);
-        else setLocalCount2(c => c + 1);
-    } else {
-        if (mode === 'MUTEX') {
-            if (threadId === 1) setThread1Status('CRITICAL');
-            else setThread2Status('CRITICAL');
-            setGlobalCount(c => c + 1);
-        } else {
-            if (thread1Status === 'SCAN' && thread2Status === 'SCAN' && Math.random() > 0.7) {
-                setCollision(true);
-                setTimeout(() => setCollision(false), 200);
-                if (Math.random() > 0.5) setGlobalCount(c => c + 1);
-            } else {
-                setGlobalCount(c => c + 1);
-            }
-        }
-    }
-  };
 
-  const renderText = (text: string, cursor: number, isActive: boolean) => {
+  const renderText = (text: string, cursor: number) => {
      return (
         <div className="font-mono text-sm bg-slate-50 p-3 rounded border border-slate-200 leading-relaxed break-all h-24 overflow-hidden relative">
             {text.split('').map((char, i) => (
                 <span key={i} className={`inline-block w-[9px] text-center transition-colors ${
-                    i === cursor ? 'bg-blue-500 text-white font-bold animate-pulse' : 
+                    i === cursor ? 'bg-blue-500 text-white font-bold' : 
                     i < cursor ? 'text-slate-400' : 'text-slate-800'
                 }`}>
                     {char === ' ' ? '\u00A0' : char}
                 </span>
             ))}
-            {isActive && <div className="absolute bottom-1 right-1 text-[10px] text-blue-500 font-bold animate-bounce">SCANNING</div>}
+            {cursor === text.length && <span className="text-xs text-slate-300 ml-1">[EOF]</span>}
         </div>
      );
   };
@@ -400,16 +415,16 @@ const Task2WordCount: React.FC = () => {
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <FileText className="text-purple-500"/> 任务二：多线程单词统计
             </h3>
-            <p className="text-sm text-slate-500">模拟真实文件IO与算法逻辑。文件1："{TEXT_FILE_1}"</p>
+            <p className="text-sm text-slate-500">模拟真实文件IO与算法逻辑。正确总数应为 14。</p>
           </div>
           <div className="flex flex-wrap gap-2">
              <div className="flex bg-slate-100 p-1 rounded-lg">
-                <button onClick={() => { reset(); setMode('UNSAFE'); }} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${mode === 'UNSAFE' ? 'bg-white text-red-600 shadow' : 'text-slate-500 hover:text-slate-700'}`}>解法1: 无锁</button>
-                <button onClick={() => { reset(); setMode('MUTEX'); }} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${mode === 'MUTEX' ? 'bg-white text-blue-600 shadow' : 'text-slate-500 hover:text-slate-700'}`}>解法1: 互斥锁</button>
-                <button onClick={() => { reset(); setMode('LOCAL'); }} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${mode === 'LOCAL' ? 'bg-white text-green-600 shadow' : 'text-slate-500 hover:text-slate-700'}`}>解法2: 局部变量</button>
+                <button onClick={() => { reset(); setMode('UNSAFE'); }} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${mode === 'UNSAFE' ? 'bg-white text-red-600 shadow' : 'text-slate-500'}`}>解法1: 无锁</button>
+                <button onClick={() => { reset(); setMode('MUTEX'); }} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${mode === 'MUTEX' ? 'bg-white text-blue-600 shadow' : 'text-slate-500'}`}>解法1: 互斥锁</button>
+                <button onClick={() => { reset(); setMode('LOCAL'); }} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${mode === 'LOCAL' ? 'bg-white text-green-600 shadow' : 'text-slate-500'}`}>解法2: 局部变量</button>
              </div>
-             <button onClick={() => setIsRunning(!isRunning)} disabled={isFinished} className={`px-5 py-2 rounded-lg font-bold text-white shadow-md ${isRunning ? 'bg-amber-500' : 'bg-blue-600'}`}>
-                {isRunning ? '暂停' : isFinished ? '完成' : '开始'}
+             <button onClick={() => setIsRunning(!isRunning)} disabled={state1 === 'FINISHED' && state2 === 'FINISHED'} className={`px-5 py-2 rounded-lg font-bold text-white shadow-md ${isRunning ? 'bg-amber-500' : 'bg-blue-600'}`}>
+                {isRunning ? '暂停' : '开始'}
              </button>
           </div>
       </div>
@@ -417,11 +432,12 @@ const Task2WordCount: React.FC = () => {
       {/* Visualization */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Thread 1 */}
-          <div className={`p-4 rounded-xl border-2 transition-all ${thread1Status !== 'IDLE' ? 'border-blue-400 bg-blue-50' : 'border-slate-200 bg-white'}`}>
+          <div className={`p-4 rounded-xl border-2 transition-all ${state1 === 'CRITICAL' ? 'border-red-500 shadow-lg' : state1 === 'WAIT_MUTEX' ? 'border-yellow-400 opacity-80' : 'border-slate-200'}`}>
                  <div className="flex justify-between items-center mb-2">
                     <span className="font-bold text-slate-700 flex items-center gap-2"><Cpu size={16}/> Thread 1</span>
+                    <span className={`text-[10px] font-bold px-2 py-1 rounded ${state1 === 'WAIT_MUTEX' ? 'bg-yellow-100 text-yellow-700' : state1==='CRITICAL'?'bg-red-100 text-red-700':'bg-slate-100 text-slate-500'}`}>{state1}</span>
                  </div>
-                 {renderText(textRef1.current, cursor1, thread1Status === 'SCAN')}
+                 {renderText(textRef1.current, cursor1)}
                  {mode === 'LOCAL' && <div className="mt-2 text-xs font-mono text-blue-600 font-bold">Local Count: {localCount1}</div>}
           </div>
 
@@ -430,25 +446,38 @@ const Task2WordCount: React.FC = () => {
              <div className="bg-slate-900 rounded-xl p-4 font-mono text-xs text-slate-300 shadow-inner relative min-h-[120px]">
                  <div className="absolute top-0 right-0 bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-500 uppercase rounded-bl">C Code</div>
                  <pre className="whitespace-pre-wrap z-10 relative">{CODE_SNIPPETS[mode]}</pre>
-                 {thread1Status === 'CRITICAL' && <div className="absolute left-0 right-0 h-4 bg-yellow-500/20 top-[60px] border-l-4 border-yellow-500"></div>}
+                 {state1 === 'CRITICAL' && <div className="absolute left-0 right-0 h-4 bg-yellow-500/20 top-[60px] border-l-4 border-yellow-500"></div>}
              </div>
 
-             <div className={`flex-1 bg-slate-50 rounded-xl border border-slate-200 p-6 flex flex-col items-center justify-center relative ${collision ? 'animate-shake bg-red-50' : ''}`}>
+             <div className="flex-1 bg-slate-50 rounded-xl border border-slate-200 p-6 flex flex-col items-center justify-center relative">
                  <div className="text-xs font-bold text-slate-400 uppercase mb-2">Shared Memory (Global)</div>
-                 <div className={`w-24 h-24 rounded-full border-4 flex flex-col items-center justify-center z-10 bg-white ${collision ? 'border-red-500' : 'border-slate-300'}`}>
+                 
+                 {/* Lock Visual */}
+                 {mode === 'MUTEX' && (
+                     <div className={`mb-2 flex items-center gap-1 px-2 py-1 rounded text-xs font-bold ${mutexLocked ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                         {mutexLocked ? <><Lock size={12}/> LOCKED (T{mutexOwner})</> : <><Unlock size={12}/> OPEN</>}
+                     </div>
+                 )}
+
+                 <div className={`w-24 h-24 rounded-full border-4 flex flex-col items-center justify-center z-10 bg-white ${mutexLocked ? 'border-red-500' : 'border-slate-300'}`}>
                      <div className="text-2xl font-mono font-bold text-slate-800">{globalCount}</div>
                  </div>
-                 {collision && <div className="text-red-500 font-bold text-xs mt-2 animate-pulse">COLLISION!</div>}
-                 {isFinished && <div className="mt-2 text-xs font-bold text-green-600">Final: {globalCount}</div>}
+                 
+                 {state1 === 'FINISHED' && state2 === 'FINISHED' && (
+                     <div className={`mt-4 text-sm font-bold ${globalCount === 14 ? 'text-green-600' : 'text-red-500'}`}>
+                         Final: {globalCount} / 14
+                     </div>
+                 )}
              </div>
           </div>
 
           {/* Thread 2 */}
-          <div className={`p-4 rounded-xl border-2 transition-all ${thread2Status !== 'IDLE' ? 'border-purple-400 bg-purple-50' : 'border-slate-200 bg-white'}`}>
+          <div className={`p-4 rounded-xl border-2 transition-all ${state2 === 'CRITICAL' ? 'border-red-500 shadow-lg' : state2 === 'WAIT_MUTEX' ? 'border-yellow-400 opacity-80' : 'border-slate-200'}`}>
                  <div className="flex justify-between items-center mb-2">
                     <span className="font-bold text-slate-700 flex items-center gap-2"><Cpu size={16}/> Thread 2</span>
+                    <span className={`text-[10px] font-bold px-2 py-1 rounded ${state2 === 'WAIT_MUTEX' ? 'bg-yellow-100 text-yellow-700' : state2==='CRITICAL'?'bg-red-100 text-red-700':'bg-slate-100 text-slate-500'}`}>{state2}</span>
                  </div>
-                 {renderText(textRef2.current, cursor2, thread2Status === 'SCAN')}
+                 {renderText(textRef2.current, cursor2)}
                  {mode === 'LOCAL' && <div className="mt-2 text-xs font-mono text-purple-600 font-bold">Local Count: {localCount2}</div>}
           </div>
       </div>

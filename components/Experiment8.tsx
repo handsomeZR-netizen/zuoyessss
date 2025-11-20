@@ -53,6 +53,48 @@ const Experiment8: React.FC = () => {
     }, ...prev].slice(0, 50));
   };
 
+  // --- Kernel Scheduler (Fix for "Stuck in Wait") ---
+  // Monitors resources and wakes up processes from waiting queues
+  useEffect(() => {
+    if (systemDeadlocked) return;
+
+    let didWake = false;
+
+    // 1. Wake from Mutex Queue if Mutex is free
+    if (!mutexLocked && mutexQueue.length > 0) {
+        const actorName = mutexQueue[0];
+        // Determine if Producer or Consumer
+        const isProducer = producers.some(p => p.name === actorName);
+        
+        if (isProducer) {
+            setProducers(prev => prev.map(p => p.name === actorName ? { ...p, state: ActorState.IDLE } : p));
+        } else {
+            setConsumers(prev => prev.map(c => c.name === actorName ? { ...c, state: ActorState.IDLE } : c));
+        }
+        
+        // Remove from queue
+        setMutexQueue(prev => prev.slice(1));
+        didWake = true;
+    }
+
+    // 2. Wake from Empty Queue if space available (Producers waiting)
+    if (!didWake && semEmpty > 0 && emptyQueue.length > 0) {
+         const actorName = emptyQueue[0];
+         setProducers(prev => prev.map(p => p.name === actorName ? { ...p, state: ActorState.IDLE } : p));
+         setEmptyQueue(prev => prev.slice(1));
+         didWake = true;
+    }
+
+    // 3. Wake from Full Queue if data available (Consumers waiting)
+    if (!didWake && semFull > 0 && fullQueue.length > 0) {
+         const actorName = fullQueue[0];
+         setConsumers(prev => prev.map(c => c.name === actorName ? { ...c, state: ActorState.IDLE } : c));
+         setFullQueue(prev => prev.slice(1));
+         didWake = true;
+    }
+
+  }, [mutexLocked, semEmpty, semFull, mutexQueue, emptyQueue, fullQueue, producers, consumers, systemDeadlocked]);
+
   // --- Simulation Logic ---
 
   const pickActor = (actorList: Actor[]) => {
@@ -67,11 +109,11 @@ const Experiment8: React.FC = () => {
     const itemsInBuffer = buffer.filter(i => i !== null).length;
     setBufferHistory(prev => [...prev.slice(-19), { time: Date.now(), count: itemsInBuffer }]);
 
-    // Reset Working to Idle
+    // Reset Working to Idle (Action completed)
     setProducers(prev => prev.map(p => p.state === ActorState.WORKING ? { ...p, state: ActorState.IDLE } : p));
     setConsumers(prev => prev.map(c => c.state === ActorState.WORKING ? { ...c, state: ActorState.IDLE } : c));
 
-    // Random Decision
+    // Random Decision to act
     const wantToProduce = Math.random() > 0.45; 
 
     if (wantToProduce) {
@@ -84,7 +126,6 @@ const Experiment8: React.FC = () => {
         
         // 1. P(mutex)
         if (mutexLocked) {
-           // Wait for mutex
            setProducers(ps => ps.map(p => p.id === producer.id ? { ...p, state: ActorState.BLOCKED } : p));
            if(!mutexQueue.includes(producer.name)) setMutexQueue(q => [...q, producer.name]);
            return;
@@ -121,8 +162,6 @@ const Experiment8: React.FC = () => {
         // Release Mutex
         setMutexLocked(false);
         setMutexOwner(null);
-        // Clear Wait Queues visual for this actor if they were there (simplified)
-        setMutexQueue(q => q.filter(n => n !== producer.name));
 
       } else {
         // NORMAL MODE: P(empty) -> P(mutex)
@@ -147,7 +186,7 @@ const Experiment8: React.FC = () => {
         setMutexLocked(true);
         setMutexOwner(producer.name);
         
-        // Clear queues
+        // Clear queues (Safety, though Kernel handles mostly)
         setEmptyQueue(q => q.filter(n => n !== producer.name));
         setMutexQueue(q => q.filter(n => n !== producer.name));
 
@@ -207,7 +246,6 @@ const Experiment8: React.FC = () => {
 
          setMutexLocked(false);
          setMutexOwner(null);
-         setMutexQueue(q => q.filter(n => n !== consumer.name));
 
       } else {
         // NORMAL MODE: P(full) -> P(mutex)
