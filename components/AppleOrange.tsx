@@ -24,58 +24,60 @@ const AppleOrange: React.FC = () => {
   const addLog = (msg: string) => setLogs(prev => [msg, ...prev].slice(0, 6));
 
   const step = useCallback(() => {
-    // Reset working states to idle randomly
-    if (fatherState === ActorState.WORKING) setFatherState(ActorState.IDLE);
-    if (motherState === ActorState.WORKING) setMotherState(ActorState.IDLE);
-    if (sonState === ActorState.WORKING) setSonState(ActorState.IDLE);
-    if (daughterState === ActorState.WORKING) setDaughterState(ActorState.IDLE);
+    // 1. Check if anyone is currently working, if so, finish their work and return (one tick for action)
+    let someoneWorking = false;
+    
+    if (fatherState === ActorState.WORKING) { setFatherState(ActorState.IDLE); someoneWorking = true; }
+    if (motherState === ActorState.WORKING) { setMotherState(ActorState.IDLE); someoneWorking = true; }
+    if (sonState === ActorState.WORKING) { setSonState(ActorState.IDLE); someoneWorking = true; }
+    if (daughterState === ActorState.WORKING) { setDaughterState(ActorState.IDLE); someoneWorking = true; }
 
-    const r = Math.random();
+    if (someoneWorking) return; // Give visual time for the "Working" state before next move
 
-    // PRODUCERS Logic
-    // Father puts Apple: Needs SemPlate > 0
-    if (r < 0.25 && fatherState === ActorState.IDLE) {
-        if (semPlate > 0) {
-            setPlate('apple');
-            setSemPlate(0);
-            setSemApple(1);
-            setFatherState(ActorState.WORKING);
-            addLog("父亲放入了一个苹果。");
-        } else {
-            // Blocked
-            // addLog("父亲想放苹果，但盘子满了。");
-        }
-    }
-    // Mother puts Orange: Needs SemPlate > 0
-    else if (r < 0.5 && motherState === ActorState.IDLE) {
-        if (semPlate > 0) {
-            setPlate('orange');
-            setSemPlate(0);
-            setSemOrange(1);
-            setMotherState(ActorState.WORKING);
-            addLog("母亲放入了一个橘子。");
-        }
-    }
-    // CONSUMERS Logic
-    // Daughter eats Apple: Needs SemApple > 0
-    else if (r < 0.75 && daughterState === ActorState.IDLE) {
-        if (semApple > 0) {
-            setPlate(null);
-            setSemApple(0);
-            setSemPlate(1);
-            setDaughterState(ActorState.WORKING);
-            addLog("女儿吃掉了苹果。");
-        }
-    }
-    // Son eats Orange: Needs SemOrange > 0
-    else if (sonState === ActorState.IDLE) {
-        if (semOrange > 0) {
-            setPlate(null);
-            setSemOrange(0);
-            setSemPlate(1);
-            setSonState(ActorState.WORKING);
-            addLog("儿子吃掉了橘子。");
-        }
+    // 2. Smart Scheduler: Find all Valid Moves
+    const candidates: string[] = [];
+
+    // Father: Can act if Plate is Empty
+    if (semPlate > 0) candidates.push('father');
+    
+    // Mother: Can act if Plate is Empty
+    if (semPlate > 0) candidates.push('mother');
+
+    // Daughter: Can act if Apple is available
+    if (semApple > 0) candidates.push('daughter');
+
+    // Son: Can act if Orange is available
+    if (semOrange > 0) candidates.push('son');
+
+    if (candidates.length === 0) return; // Should theoretically not happen unless deadlocked by logic, but here logic is sound.
+
+    // 3. Pick a random winner from VALID candidates
+    const winner = candidates[Math.floor(Math.random() * candidates.length)];
+
+    if (winner === 'father') {
+         setPlate('apple');
+         setSemPlate(0);
+         setSemApple(1);
+         setFatherState(ActorState.WORKING);
+         addLog("父亲放入了一个苹果。");
+    } else if (winner === 'mother') {
+         setPlate('orange');
+         setSemPlate(0);
+         setSemOrange(1);
+         setMotherState(ActorState.WORKING);
+         addLog("母亲放入了一个橘子。");
+    } else if (winner === 'daughter') {
+         setPlate(null);
+         setSemApple(0);
+         setSemPlate(1);
+         setDaughterState(ActorState.WORKING);
+         addLog("女儿吃掉了苹果。");
+    } else if (winner === 'son') {
+         setPlate(null);
+         setSemOrange(0);
+         setSemPlate(1);
+         setSonState(ActorState.WORKING);
+         addLog("儿子吃掉了橘子。");
     }
 
   }, [fatherState, motherState, sonState, daughterState, semPlate, semApple, semOrange]);
@@ -101,20 +103,49 @@ const AppleOrange: React.FC = () => {
       setLogs([]);
   };
 
-  const ActorCard = ({ role, icon: Icon, color, state, target }: { role: string, icon: any, color: string, state: ActorState, target: string }) => (
-      <div className={`flex flex-col items-center p-4 rounded-xl border-2 transition-all duration-300 ${
-          state === ActorState.WORKING ? `bg-${color}-50 border-${color}-500 scale-105 shadow-lg` : 'bg-white border-slate-100'
-      }`}>
-          <div className={`w-12 h-12 rounded-full bg-${color}-100 flex items-center justify-center text-${color}-600 mb-2`}>
-              <Icon size={24} />
-          </div>
-          <div className="font-bold text-slate-700">{role}</div>
-          <div className="text-xs text-slate-400 mb-2">{target}</div>
-          <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${state === ActorState.WORKING ? `bg-${color}-100 text-${color}-700` : 'bg-slate-100 text-slate-400'}`}>
-              {state === ActorState.WORKING ? 'ACTING' : 'WAITING'}
-          </div>
-      </div>
-  );
+  // Helper to display status text
+  const getStatus = (role: string, state: ActorState) => {
+      if (state === ActorState.WORKING) return "正在操作...";
+      
+      if (role === 'father' || role === 'mother') {
+          return semPlate === 0 ? "等待空盘 (Wait)" : "就绪 (Ready)";
+      }
+      if (role === 'daughter') {
+          return semApple === 0 ? "等待苹果 (Wait)" : "就绪 (Ready)";
+      }
+      if (role === 'son') {
+          return semOrange === 0 ? "等待橘子 (Wait)" : "就绪 (Ready)";
+      }
+      return "Idle";
+  };
+
+  const ActorCard = ({ role, roleId, icon: Icon, color, state, target }: { role: string, roleId: string, icon: any, color: string, state: ActorState, target: string }) => {
+      const statusText = getStatus(roleId, state);
+      const isWaiting = statusText.includes("等待");
+
+      return (
+        <div className={`flex flex-col items-center p-4 rounded-xl border-2 transition-all duration-300 ${
+            state === ActorState.WORKING ? `bg-${color}-50 border-${color}-500 scale-105 shadow-lg` : 
+            isWaiting ? 'bg-slate-50 border-slate-200 opacity-70' : 'bg-white border-slate-200'
+        }`}>
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 transition-colors ${
+                state === ActorState.WORKING ? `bg-${color}-100 text-${color}-600` : 
+                isWaiting ? 'bg-slate-200 text-slate-400' : `bg-${color}-50 text-${color}-400`
+            }`}>
+                <Icon size={24} />
+            </div>
+            <div className="font-bold text-slate-700 text-sm md:text-base">{role}</div>
+            <div className="text-xs text-slate-400 mb-2">{target}</div>
+            
+            <div className={`px-2 py-1 rounded text-[10px] font-bold uppercase transition-colors ${
+                state === ActorState.WORKING ? `bg-${color}-100 text-${color}-700` : 
+                isWaiting ? 'bg-red-50 text-red-500 border border-red-100' : 'bg-green-50 text-green-600 border border-green-100'
+            }`}>
+                {statusText}
+            </div>
+        </div>
+      );
+  };
 
   const SemaphoreBadge = ({ label, val, activeColor }: { label: string, val: number, activeColor: string }) => (
       <div className={`px-3 py-2 rounded-lg border text-center min-w-[80px] transition-colors duration-300 ${val > 0 ? `bg-${activeColor}-50 border-${activeColor}-300` : 'bg-slate-50 border-slate-200 opacity-60'}`}>
@@ -126,10 +157,10 @@ const AppleOrange: React.FC = () => {
   return (
     <div className="space-y-6 animate-fade-in">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-             <div className="flex justify-between items-center">
+             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <div>
                     <h2 className="text-2xl font-bold text-slate-800">苹果 - 橘子问题</h2>
-                    <p className="text-slate-500">多信号量同步与进程互斥演示</p>
+                    <p className="text-slate-500 text-sm">多信号量同步与进程互斥演示</p>
                 </div>
                 <div className="flex gap-2">
                     <button onClick={reset} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg"><RotateCcw size={20}/></button>
@@ -150,8 +181,8 @@ const AppleOrange: React.FC = () => {
                 
                 {/* Producers Row */}
                 <div className="flex justify-around">
-                    <ActorCard role="父亲 (Father)" icon={User} color="blue" state={fatherState} target="放入苹果" />
-                    <ActorCard role="母亲 (Mother)" icon={User} color="purple" state={motherState} target="放入橘子" />
+                    <ActorCard role="父亲 (Father)" roleId="father" icon={User} color="blue" state={fatherState} target="放入苹果" />
+                    <ActorCard role="母亲 (Mother)" roleId="mother" icon={User} color="purple" state={motherState} target="放入橘子" />
                 </div>
 
                 {/* Arrows Down */}
@@ -189,8 +220,8 @@ const AppleOrange: React.FC = () => {
 
                 {/* Consumers Row */}
                 <div className="flex justify-around">
-                    <ActorCard role="女儿 (Daughter)" icon={User} color="red" state={daughterState} target="吃掉苹果" />
-                    <ActorCard role="儿子 (Son)" icon={User} color="orange" state={sonState} target="吃掉橘子" />
+                    <ActorCard role="女儿 (Daughter)" roleId="daughter" icon={User} color="red" state={daughterState} target="吃掉苹果" />
+                    <ActorCard role="儿子 (Son)" roleId="son" icon={User} color="orange" state={sonState} target="吃掉橘子" />
                 </div>
             </div>
 
@@ -207,9 +238,9 @@ const AppleOrange: React.FC = () => {
                         <SemaphoreBadge label="S_Orange" val={semOrange} activeColor="orange" />
                     </div>
                     <div className="mt-4 text-xs text-slate-500">
-                        <p><strong>S_Plate:</strong> 盘子是否为空 (Mutex for production)</p>
-                        <p><strong>S_Apple:</strong> 盘中是否有苹果 (Signal to Daughter)</p>
-                        <p><strong>S_Orange:</strong> 盘中是否有橘子 (Signal to Son)</p>
+                        <p><strong>S_Plate:</strong> 盘子是否为空 (互斥)</p>
+                        <p><strong>S_Apple:</strong> 盘中是否有苹果 (唤醒女儿)</p>
+                        <p><strong>S_Orange:</strong> 盘中是否有橘子 (唤醒儿子)</p>
                     </div>
                 </div>
 
@@ -217,12 +248,12 @@ const AppleOrange: React.FC = () => {
                 <div className="bg-slate-900 p-4 rounded-xl text-slate-300 h-[300px] overflow-hidden flex flex-col">
                     <div className="font-bold text-xs uppercase border-b border-slate-700 pb-2 mb-2">Action Log</div>
                     <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 font-mono text-xs">
+                        {logs.length === 0 && <div className="text-slate-600 italic">等待开始...</div>}
                         {logs.map((log, i) => (
                             <div key={i} className="border-l-2 border-blue-500 pl-2 opacity-90">
                                 <span className="text-blue-400 mr-1">&gt;</span>{log}
                             </div>
                         ))}
-                         {logs.length === 0 && <div className="text-slate-600 italic">等待开始...</div>}
                     </div>
                 </div>
             </div>

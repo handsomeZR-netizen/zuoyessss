@@ -26,17 +26,24 @@ const Philosophers: React.FC = () => {
 
   const addLog = (msg: string) => setLogs(prev => [msg, ...prev].slice(0, 6));
 
-  // Helper to check fork availability
-  const leftFork = (i: number) => i;
-  const rightFork = (i: number) => (i + 1) % PHILOSOPHER_COUNT;
+  // GEOMETRY MAPPING
+  // Visual Layout: P0 (Top) -> Fork0 -> P1 (Right) -> Fork1 ...
+  // Therefore: Fork i is between P[i] and P[i+1].
+  // P[i]'s Right Fork is Fork[i].
+  // P[i]'s Left Fork is Fork[i-1] (wrapped).
+  
+  const getRightForkIndex = (i: number) => i;
+  const getLeftForkIndex = (i: number) => (i - 1 + PHILOSOPHER_COUNT) % PHILOSOPHER_COUNT;
 
   const step = useCallback(() => {
     if (deadlockDetected) return;
 
-    // Check for deadlock state: Everyone has left fork (or just one fork) and waiting for other
-    // Simplified detection for visualization: If everyone has exactly one fork and is hungry/waiting
+    // Deadlock Check: Everyone holding LEFT fork ONLY
+    // Note: HAS_LEFT_FORK state implies holding ONE fork.
+    // We need to verify logic consistency.
     const holdingOne = philosopherStates.filter(s => s === ActorState.HAS_LEFT_FORK).length;
     if (holdingOne === PHILOSOPHER_COUNT) {
+        // Double check that everyone is waiting for the other fork
         setDeadlockDetected(true);
         addLog("系统检测到死锁！所有哲学家都持有左手筷子等待右手筷子。");
         setIsRunning(false);
@@ -48,23 +55,25 @@ const Philosophers: React.FC = () => {
         const newForks = [...forks];
         let changed = false;
 
-        // Logic for each philosopher
-        // We iterate randomly to simulate async threads
+        // Iterate randomly
         const indices = Array.from({ length: PHILOSOPHER_COUNT }, (_, i) => i).sort(() => Math.random() - 0.5);
 
         for (const i of indices) {
             const currentState = newStates[i];
-            const left = leftFork(i);
-            const right = rightFork(i);
+            
+            // Identify specific forks for this philosopher
+            const leftForkIdx = getLeftForkIndex(i);
+            const rightForkIdx = getRightForkIndex(i);
 
-            // 1. EATING -> THINKING (Finish eating)
+            // 1. EATING -> THINKING
             if (currentState === ActorState.EATING) {
-                // Randomly finish eating
                 if (Math.random() > 0.6) {
                     newStates[i] = ActorState.THINKING;
-                    newForks[left] = null;
-                    newForks[right] = null;
-                    addLog(`哲学家 ${i+1} 吃饱了，开始思考。`);
+                    // Release both
+                    if (newForks[leftForkIdx] === i) newForks[leftForkIdx] = null;
+                    if (newForks[rightForkIdx] === i) newForks[rightForkIdx] = null;
+                    
+                    addLog(`哲学家 ${i+1} 吃饱了，放下左右筷子 (${leftForkIdx}, ${rightForkIdx}) 开始思考。`);
                     changed = true;
                 }
                 continue;
@@ -80,61 +89,56 @@ const Philosophers: React.FC = () => {
                 continue;
             }
 
-            // 3. HUNGRY -> Try to pick forks
+            // 3. HUNGRY -> Try pick up FIRST fork
             if (currentState === ActorState.HUNGRY) {
-                // STRATEGY: NAIVE (Left then Right)
                 if (!useHierarchy) {
-                    if (newForks[left] === null) {
-                        newForks[left] = i;
-                        newStates[i] = ActorState.HAS_LEFT_FORK;
-                        addLog(`哲学家 ${i+1} 拿起了左边的筷子。`);
-                        changed = true;
-                    }
-                } 
-                // STRATEGY: HIERARCHY (Resource Ordering)
-                // Odd numbered pick Left then Right, Even numbered pick Right then Left (or similar)
-                // Classic Dijkstra: Identify forks by number. Always pick lower number first.
-                else {
-                    const firstFork = Math.min(left, right);
-                    const secondFork = Math.max(left, right);
-                    
-                    // Simplification for step-by-step:
-                    // If holding nothing, try pick first
-                    // If holding first, try pick second
-                    // Note: We need a state for "HAS_FIRST_FORK" to be precise, but reusing HAS_LEFT_FORK as "HAS_ONE_FORK"
-                    
-                    if (newForks[firstFork] === null && newForks[secondFork] === null) {
-                        // Atomic pickup for simplicity in this step logic, or
-                        // actually visually we want to see partial pickup.
-                        // Let's stick to: Can only pick up if BOTH are free? No, that's too safe (Monitor solution).
-                        // Let's implement "Pick Lower First"
-                        
-                        if (newForks[firstFork] === null) {
-                             newForks[firstFork] = i;
-                             newStates[i] = ActorState.HAS_LEFT_FORK; // Using this state generically as "Has 1 fork"
-                             changed = true;
-                        }
-                    }
-                }
-            }
-
-            // 4. HAS ONE FORK -> Try pick second
-            if (currentState === ActorState.HAS_LEFT_FORK) {
-                if (!useHierarchy) {
-                    // Naive: Needs Right
-                    if (newForks[right] === null) {
-                        newForks[right] = i;
-                        newStates[i] = ActorState.EATING;
-                        addLog(`哲学家 ${i+1} 拿起了右边的筷子，开始进餐！`);
+                    // Naive: Try pick Left first
+                    if (newForks[leftForkIdx] === null) {
+                        newForks[leftForkIdx] = i;
+                        newStates[i] = ActorState.HAS_LEFT_FORK; 
+                        addLog(`哲学家 ${i+1} 拿起了左手筷子 (Fork ${leftForkIdx})。`);
                         changed = true;
                     }
                 } else {
-                    // Hierarchy: Needs higher numbered fork
-                    const secondFork = Math.max(left, right);
-                    if (newForks[secondFork] === null) {
-                        newForks[secondFork] = i;
+                    // Hierarchy: Pick Lower Numbered Fork First
+                    const firstIdx = Math.min(leftForkIdx, rightForkIdx);
+                    const secondIdx = Math.max(leftForkIdx, rightForkIdx);
+                    
+                    // Simplified step logic: Only pick if the lower one is free
+                    // In real OS, we block on P(sem). Here we check availability.
+                    // If holding nothing, try pick 'firstIdx'
+                    if (newForks[firstIdx] === null) {
+                        newForks[firstIdx] = i;
+                        newStates[i] = ActorState.HAS_LEFT_FORK; // Generic "Has 1 fork" state
+                        addLog(`哲学家 ${i+1} (有序策略) 拿起了小号筷子 (Fork ${firstIdx})。`);
+                        changed = true;
+                    }
+                }
+                continue;
+            }
+
+            // 4. HAS ONE FORK -> Try pick up SECOND fork
+            if (currentState === ActorState.HAS_LEFT_FORK) {
+                if (!useHierarchy) {
+                    // Naive: Needs Right
+                    if (newForks[rightForkIdx] === null) {
+                        newForks[rightForkIdx] = i;
                         newStates[i] = ActorState.EATING;
-                        addLog(`哲学家 ${i+1} 拿到第二支筷子，开始进餐！(有序)`);
+                        addLog(`哲学家 ${i+1} 拿起了右手筷子 (Fork ${rightForkIdx})，开始进餐！`);
+                        changed = true;
+                    }
+                } else {
+                    // Hierarchy: Needs the Higher Numbered Fork
+                    const secondIdx = Math.max(leftForkIdx, rightForkIdx);
+                    // Note: If we picked right first (because it was smaller), we need left now.
+                    // We just check if 'secondIdx' matches what we don't have?
+                    // Let's just check both. We need to hold both to eat.
+                    // We already hold one (assumed to be the smaller one).
+                    
+                    if (newForks[secondIdx] === null) {
+                        newForks[secondIdx] = i;
+                        newStates[i] = ActorState.EATING;
+                        addLog(`哲学家 ${i+1} 拿起了大号筷子 (Fork ${secondIdx})，开始进餐！`);
                         changed = true;
                     }
                 }
@@ -157,17 +161,23 @@ const Philosophers: React.FC = () => {
     return () => clearInterval(interval);
   }, [isRunning, step]);
 
-  // Force Deadlock
+  // Force Deadlock: Everyone takes Left Fork
   const triggerDeadlock = () => {
       setIsRunning(false);
       setUseHierarchy(false);
-      setDeadlockDetected(true);
       
       const newStates = Array(PHILOSOPHER_COUNT).fill(ActorState.HAS_LEFT_FORK);
-      const newForks = forks.map((_, i) => i); // Fork i taken by Phil i (Left fork)
+      const newForks = Array(PHILOSOPHER_COUNT).fill(null);
+      
+      // Assign Left Fork to each Philosopher
+      for(let i=0; i<PHILOSOPHER_COUNT; i++) {
+          const leftIdx = getLeftForkIndex(i);
+          newForks[leftIdx] = i;
+      }
       
       setPhilosopherStates(newStates);
       setForks(newForks);
+      setDeadlockDetected(true); // Immediate detect next tick or manually set
       addLog("人为触发死锁：每个人都拿起了左手边的筷子！");
   };
 
@@ -179,7 +189,7 @@ const Philosophers: React.FC = () => {
       setLogs([]);
   };
 
-  // Visualization geometry
+  // Visualization Geometry
   const radius = 120;
   const center = { x: 160, y: 160 };
 
@@ -270,30 +280,40 @@ const Philosophers: React.FC = () => {
 
                     {/* Forks */}
                     {forks.map((owner, i) => {
-                        // Fork i is between Phil i and Phil i+1
+                        // Fork i Geometry: Between P[i] and P[i+1]
+                        // This angle places it between the two philosophers
                         const angle = ((i * (360 / PHILOSOPHER_COUNT)) + (360 / PHILOSOPHER_COUNT) / 2) - 90;
                         const rad = (angle * Math.PI) / 180;
                         
                         // Default position on table
-                        let dist = 70; // distance from center
-                        let forkX = center.x + dist * Math.cos(rad);
-                        let forkY = center.y + dist * Math.sin(rad);
-                        let rotation = angle;
+                        let forkX = center.x + 70 * Math.cos(rad);
+                        let forkY = center.y + 70 * Math.sin(rad);
+                        let rotation = angle; // Base rotation pointing out
 
-                        // If taken, move towards owner
+                        // If taken, calculate hand position
                         if (owner !== null) {
                             const ownerAngle = (owner * (360 / PHILOSOPHER_COUNT)) - 90;
-                            const ownerRad = (ownerAngle * Math.PI) / 180;
-                            // Move closer to owner
-                            forkX = center.x + (radius - 35) * Math.cos(ownerRad);
-                            forkY = center.y + (radius - 35) * Math.sin(ownerRad);
                             
-                            // Slight offset to left or right hand
-                            // This logic is purely visual approximation
-                            const isLeftHand = (owner === i); // If owner index matches fork index, it's their left fork
-                            const offsetAngle = ownerRad + (isLeftHand ? -0.3 : 0.3);
-                             forkX = center.x + (radius - 35) * Math.cos(offsetAngle);
-                             forkY = center.y + (radius - 35) * Math.sin(offsetAngle);
+                            // Determine if it's owner's Right Hand or Left Hand
+                            // Logic: Fork i is Right of P[i], Left of P[i+1]
+                            // We compare owner index with fork index
+                            const isRightHand = (owner === i);
+                            const isLeftHand = (owner === (i + 1) % PHILOSOPHER_COUNT);
+
+                            // Offset for hands (in radians)
+                            // Right hand is clockwise (+), Left hand is counter-clockwise (-)
+                            const handOffset = isRightHand ? 0.35 : -0.35;
+                            const ownerRad = ((ownerAngle) * Math.PI) / 180;
+                            const targetRad = ownerRad + handOffset;
+
+                            // Move close to philosopher
+                            forkX = center.x + (radius - 35) * Math.cos(targetRad);
+                            forkY = center.y + (radius - 35) * Math.sin(targetRad);
+                            
+                            // Rotate to simulate holding
+                            // Base person angle + 90 = facing center
+                            // Right hand: Tilt left (-45). Left hand: Tilt right (+45)
+                            rotation = ownerAngle + 90 + (isRightHand ? -45 : 45);
                         }
 
                         return (
