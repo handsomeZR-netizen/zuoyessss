@@ -1,0 +1,5 @@
+{
+  "name": "OS Concurrency Lab",
+  "description": "An interactive visualization of Operating System concurrency concepts, featuring Thread Management, Producer-Consumer problems, and Reader-Writer synchronization.",
+  "requestFramePermissions": []
+}
